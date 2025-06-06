@@ -4,6 +4,7 @@ import os
 from itertools import combinations, product
 from math import exp
 from dotenv import load_dotenv
+from typing import Dict, List, Tuple, Any
 
 load_dotenv()
 
@@ -18,7 +19,7 @@ class DotaDraftAnalyzer:
     def __init__(self):
         """Initialize the DotaDraftAnalyzer with API configuration and hero data."""
         self.STRATZ_API_URL = os.getenv("STRATZ_API_URL")
-        self.REMOVED = os.getenv("REMOVED")
+        self.STRATZ_API_KEY = os.getenv("STRATZ_API_KEY")
 
         # Convert environment variables to floats with default values
         self.WEIGHT_INDIVIDUAL = float(os.getenv("WEIGHT_INDIVIDUAL", "1.0"))
@@ -48,7 +49,7 @@ class DotaDraftAnalyzer:
         }
         """
         headers = {
-            "Authorization": f"Bearer {self.REMOVED}",
+            "Authorization": f"Bearer {self.STRATZ_API_KEY}",
             "User-Agent": "STRATZ_API",
             "Accept": "application/json",
         }
@@ -107,7 +108,7 @@ class DotaDraftAnalyzer:
         }}
         """
         headers = {
-            "Authorization": f"Bearer {self.REMOVED}",
+            "Authorization": f"Bearer {self.STRATZ_API_KEY}",
             "User-Agent": "STRATZ_API",
             "Accept": "application/json",
         }
@@ -127,11 +128,16 @@ class DotaDraftAnalyzer:
             hero_id (int): The ID of the hero being analyzed.
 
         Returns:
-            tuple: (synergy_dict, counter_dict) containing hero synergy and counter data.
+            tuple: (synergy_dict, counter_dict, individual_winrate) containing hero data.
         """
         synergy = {}
         counter = {}
+        individual_winrate = 0.5  # Default value
         matchup = raw_data["data"]["heroStats"]["heroVsHeroMatchup"]
+
+        # Calculate individual winrate from matchup data
+        total_matches = 0
+        total_wins = 0
 
         for section in ["advantage", "disadvantage"]:
             for matchup_item in matchup[section]:
@@ -146,7 +152,16 @@ class DotaDraftAnalyzer:
                         else:  # vs
                             key = (h1, h2)
                             counter[key] = winrate
-        return synergy, counter
+
+                        # Update individual winrate calculation
+                        if h1 == hero_id or h2 == hero_id:
+                            total_matches += 1
+                            total_wins += winrate
+
+        if total_matches > 0:
+            individual_winrate = total_wins / total_matches
+
+        return synergy, counter, individual_winrate
 
     def calculate_team_score(self, team, enemy, winrates, synergies, counters):
         """
@@ -160,27 +175,43 @@ class DotaDraftAnalyzer:
             counters (dict): Dictionary of hero counter data.
 
         Returns:
-            float: The calculated team score.
+            tuple: (team_score, synergy_score, counter_score)
         """
         score = 0.0
+        synergy_score = 0.0
+        counter_score = 0.0
 
         # Individual hero winrate contributions
         for h in team:
             score += self.WEIGHT_INDIVIDUAL * (winrates.get(h, 0.5) - 0.5)
 
         # Synergy (within same team)
+        synergy_count = 0
         for h1, h2 in combinations(team, 2):
             key = tuple(sorted((h1, h2)))
             if key in synergies:
-                score += self.WEIGHT_SYNERGY * (synergies[key] - 0.5)
+                synergy_value = synergies[key] - 0.5
+                score += self.WEIGHT_SYNERGY * synergy_value
+                synergy_score += synergy_value
+                synergy_count += 1
+
+        if synergy_count > 0:
+            synergy_score /= synergy_count
 
         # Countering enemy heroes
+        counter_count = 0
         for h1, h2 in product(team, enemy):
             key = (h1, h2)
             if key in counters:
-                score += self.WEIGHT_COUNTER * (counters[key] - 0.5)
+                counter_value = counters[key] - 0.5
+                score += self.WEIGHT_COUNTER * counter_value
+                counter_score += counter_value
+                counter_count += 1
 
-        return score
+        if counter_count > 0:
+            counter_score /= counter_count
+
+        return score, synergy_score, counter_score
 
     def win_probability(self, score_radiant, score_dire):
         """
@@ -213,19 +244,145 @@ class DotaDraftAnalyzer:
         for hero_id in hero_ids:
             print(f"Fetching data for hero {hero_id}...")
             raw = self.get_hero_vs_hero_matchup(hero_id)
-            sy, co = self.parse_matchup_data(raw, hero_id)
-
-            # Cache individual winrate as avg of with/against (fallback)
-            winrates[hero_id] = 0.5 + (
-                sum((w - 0.5) for w in sy.values()) +
-                sum((w - 0.5) for w in co.values())
-            ) / (len(sy) + len(co) + 1e-5)
-
+            sy, co, wr = self.parse_matchup_data(raw, hero_id)
+            winrates[hero_id] = wr
             synergies.update(sy)
             counters.update(co)
             time.sleep(0.5)  # Avoid throttling
 
         return winrates, synergies, counters
+
+    def get_hero_analysis(self, hero_id: int, team_heroes: List[int], enemy_heroes: List[int],
+                         winrates: Dict[int, float], synergies: Dict[Tuple[int, int], float],
+                         counters: Dict[Tuple[int, int], float]) -> Dict[str, Any]:
+        """
+        Get detailed analysis for a single hero.
+
+        Args:
+            hero_id (int): The hero ID to analyze
+            team_heroes (List[int]): List of hero IDs in the same team
+            enemy_heroes (List[int]): List of hero IDs in the enemy team
+            winrates (Dict[int, float]): Dictionary of hero winrates
+            synergies (Dict[Tuple[int, int], float]): Dictionary of hero synergies
+            counters (Dict[Tuple[int, int], float]): Dictionary of hero counters
+
+        Returns:
+            Dict[str, Any]: Detailed hero analysis
+        """
+        # Calculate synergy score
+        synergy_score = 0.0
+        hero_synergies = []
+        for teammate in team_heroes:
+            if teammate != hero_id:
+                key = tuple(sorted((hero_id, teammate)))
+                if key in synergies:
+                    win_rate = synergies[key]
+                    synergy_score += win_rate - 0.5
+                    hero_synergies.append({
+                        "hero_id": teammate,
+                        "win_rate": win_rate
+                    })
+
+        if len(hero_synergies) > 0:
+            synergy_score /= len(hero_synergies)
+
+        # Calculate counter score
+        counter_score = 0.0
+        hero_counters = []
+        for enemy in enemy_heroes:
+            key = (hero_id, enemy)
+            if key in counters:
+                win_rate = counters[key]
+                counter_score += win_rate - 0.5
+                hero_counters.append({
+                    "hero_id": enemy,
+                    "win_rate": win_rate
+                })
+
+        if len(hero_counters) > 0:
+            counter_score /= len(hero_counters)
+
+        return {
+            "id": hero_id,
+            "name": self.hero_directory[hero_id],
+            "win_rate": winrates.get(hero_id, 0.5),
+            "synergy_score": synergy_score + 0.5,  # Normalize to 0-1 range
+            "counter_score": counter_score + 0.5,  # Normalize to 0-1 range
+            "synergies": hero_synergies,
+            "counters": hero_counters
+        }
+
+    def get_team_analysis(self, team_heroes: List[int], enemy_heroes: List[int],
+                         winrates: Dict[int, float], synergies: Dict[Tuple[int, int], float],
+                         counters: Dict[Tuple[int, int], float]) -> Dict[str, Any]:
+        """
+        Get detailed analysis for a team.
+
+        Args:
+            team_heroes (List[int]): List of hero IDs in the team
+            enemy_heroes (List[int]): List of hero IDs in the enemy team
+            winrates (Dict[int, float]): Dictionary of hero winrates
+            synergies (Dict[Tuple[int, int], float]): Dictionary of hero synergies
+            counters (Dict[Tuple[int, int], float]): Dictionary of hero counters
+
+        Returns:
+            Dict[str, Any]: Detailed team analysis
+        """
+        # Calculate team scores
+        team_score, team_synergy_score, team_counter_score = self.calculate_team_score(
+            team_heroes, enemy_heroes, winrates, synergies, counters
+        )
+
+        # Get individual hero analysis
+        heroes = [
+            self.get_hero_analysis(hero_id, team_heroes, enemy_heroes, winrates, synergies, counters)
+            for hero_id in team_heroes
+        ]
+
+        # Generate synergy description
+        synergy_pairs = []
+        for h1, h2 in combinations(team_heroes, 2):
+            key = tuple(sorted((h1, h2)))
+            if key in synergies and synergies[key] > 0.6:  # Strong synergy threshold
+                synergy_pairs.append(
+                    f"{self.hero_directory[h1]} and {self.hero_directory[h2]}"
+                )
+
+        synergy_description = " and ".join(synergy_pairs) if synergy_pairs else "No strong synergies found"
+
+        # Generate counter description
+        counter_pairs = []
+        for h1 in team_heroes:
+            for h2 in enemy_heroes:
+                key = (h1, h2)
+                if key in counters and counters[key] > 0.6:  # Strong counter threshold
+                    counter_pairs.append(
+                        f"{self.hero_directory[h1]} counters {self.hero_directory[h2]}"
+                    )
+
+        counter_description = " and ".join(counter_pairs) if counter_pairs else "No strong counters found"
+
+        # Generate timing and strategy
+        timing_and_strategy = {
+            "early_game": "Focus on securing farm and objectives",
+            "mid_game": "Look for team fights and map control",
+            "late_game": "Push for high ground and end the game"
+        }
+
+        # Generate conclusion
+        conclusion = f"Team composition {'has strong synergies' if synergy_pairs else 'lacks strong synergies'} " \
+                    f"and {'has good counters' if counter_pairs else 'lacks strong counters'}."
+
+        return {
+            "heroes": heroes,
+            "team_win_rate": team_score + 0.5,  # Normalize to 0-1 range
+            "team_synergy_score": team_synergy_score + 0.5,  # Normalize to 0-1 range
+            "team_counter_score": team_counter_score + 0.5,  # Normalize to 0-1 range
+            "synergy_description": synergy_description,
+            "counter_description": counter_description,
+            "timing_and_strategy": timing_and_strategy,
+            "conclusion": conclusion
+        }
 
     def evaluate_draft(self, radiant_ids, dire_ids):
         """
@@ -236,18 +393,16 @@ class DotaDraftAnalyzer:
             dire_ids (list): List of hero IDs in the Dire team.
 
         Returns:
-            tuple: (radiant_win_probability, dire_win_probability)
+            tuple: (radiant_analysis, dire_analysis) containing detailed team analysis
         """
         all_hero_ids = set(radiant_ids + dire_ids)
         winrates, synergies, counters = self.build_full_matchup_matrix(all_hero_ids)
 
-        radiant_score = self.calculate_team_score(radiant_ids, dire_ids, winrates, synergies, counters)
-        dire_score = self.calculate_team_score(dire_ids, radiant_ids, winrates, synergies, counters)
+        # Get detailed analysis for both teams
+        radiant_analysis = self.get_team_analysis(radiant_ids, dire_ids, winrates, synergies, counters)
+        dire_analysis = self.get_team_analysis(dire_ids, radiant_ids, winrates, synergies, counters)
 
-        prob_radiant = self.win_probability(radiant_score, dire_score)
-        prob_dire = 1 - prob_radiant
-
-        return prob_radiant, prob_dire
+        return radiant_analysis, dire_analysis
 
     def print_draft_analysis(self, radiant_ids, dire_ids):
         """
@@ -257,12 +412,23 @@ class DotaDraftAnalyzer:
             radiant_ids (list): List of hero IDs in the Radiant team.
             dire_ids (list): List of hero IDs in the Dire team.
         """
-        prob_radiant, prob_dire = self.evaluate_draft(radiant_ids, dire_ids)
+        radiant_analysis, dire_analysis = self.evaluate_draft(radiant_ids, dire_ids)
 
-        print(f"\nRadiant: {', '.join(self.hero_directory[hero_id] for hero_id in radiant_ids)}")
-        print(f"Dire: {', '.join(self.hero_directory[hero_id] for hero_id in dire_ids)}")
-        print(f"\nRadiant win probability: {round(prob_radiant * 100)}%")
-        print(f"Dire win probability:    {round(prob_dire * 100)}%")
+        print("\nRadiant Team Analysis:")
+        print(f"Win Rate: {round(radiant_analysis['team_win_rate'] * 100)}%")
+        print(f"Synergy Score: {round(radiant_analysis['team_synergy_score'] * 100)}%")
+        print(f"Counter Score: {round(radiant_analysis['team_counter_score'] * 100)}%")
+        print(f"\nSynergies: {radiant_analysis['synergy_description']}")
+        print(f"Counters: {radiant_analysis['counter_description']}")
+        print(f"\nConclusion: {radiant_analysis['conclusion']}")
+
+        print("\nDire Team Analysis:")
+        print(f"Win Rate: {round(dire_analysis['team_win_rate'] * 100)}%")
+        print(f"Synergy Score: {round(dire_analysis['team_synergy_score'] * 100)}%")
+        print(f"Counter Score: {round(dire_analysis['team_counter_score'] * 100)}%")
+        print(f"\nSynergies: {dire_analysis['synergy_description']}")
+        print(f"Counters: {dire_analysis['counter_description']}")
+        print(f"\nConclusion: {dire_analysis['conclusion']}")
 
 
 if __name__ == "__main__":

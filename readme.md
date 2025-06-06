@@ -4,150 +4,169 @@ A tool for analyzing Dota 2 draft compositions and calculating win probabilities
 
 ## Features
 
-- Calculate team win probabilities based on hero matchups
-- Analyze individual hero win rates, team synergies, and counter picks
-- REST API for easy integration
-- Automatic hero name resolution
+- Win probability calculations for team compositions
+- Individual hero analysis including:
+  - Win rates
+  - Synergy scores
+  - Counter scores
+  - Detailed matchup data
+- Team composition analysis including:
+  - Overall team win rates
+  - Team synergy scores
+  - Team counter scores
+  - Strategic recommendations
+- REST API integration with FastAPI
+- Detailed error handling and validation
 
 ## Installation
 
-1. Clone the repository
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/dota-analyst.git
+cd dota-analyst
+```
+
 2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Create a `.env` file with your STRATZ API key:
+3. Create a `.env` file in the project root with your STRATZ API key:
 ```
 REMOVED=your_api_key_here
-STRATZ_API_URL=https://api.stratz.com/graphql
+STRATZ_API_URL=https://api.stratz.com/api/v1
+WEIGHT_INDIVIDUAL=1.0
+WEIGHT_SYNERGY=1.0
+WEIGHT_COUNTER=1.0
+FACTOR=2.0
 ```
 
 ## Usage
 
 ### Running the API Server
 
-Start the FastAPI server:
+Start the FastAPI server using Uvicorn:
 ```bash
 uvicorn api:app --reload
 ```
 
-The API will be available at:
-- API: http://localhost:8000
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+The API will be available at `http://localhost:8000`
 
 ### API Endpoints
 
 #### POST /analyze-draft
-Analyzes a draft and returns win probabilities.
+Analyzes a draft and returns detailed win probabilities and analysis.
 
 Request body:
 ```json
 {
-  "radiant_ids": [1, 2, 3, 4, 5],
-  "dire_ids": [6, 7, 8, 9, 10]
+    "radiant_ids": [1, 2, 3, 4, 5],
+    "dire_ids": [6, 7, 8, 9, 10]
 }
 ```
 
 Response:
 ```json
 {
-  "radiant_heroes": [
-    {"id": 1, "name": "Anti-Mage"},
-    {"id": 2, "name": "Axe"},
-    {"id": 3, "name": "Bane"},
-    {"id": 4, "name": "Bloodseeker"},
-    {"id": 5, "name": "Crystal Maiden"}
-  ],
-  "dire_heroes": [
-    {"id": 6, "name": "Drow Ranger"},
-    {"id": 7, "name": "Earthshaker"},
-    {"id": 8, "name": "Ember Spirit"},
-    {"id": 9, "name": "Invoker"},
-    {"id": 10, "name": "Juggernaut"}
-  ],
-  "radiant_win_probability": 52,
-  "dire_win_probability": 48
+    "radiant": {
+        "heroes": [
+            {
+                "id": 1,
+                "name": "Antimage",
+                "win_rate": 0.5,
+                "synergy_score": 0.5,
+                "counter_score": 0.5,
+                "synergies": [
+                    {
+                        "hero_id": 2,
+                        "win_rate": 0.5
+                    }
+                ],
+                "counters": [
+                    {
+                        "hero_id": 3,
+                        "win_rate": 0.5
+                    }
+                ]
+            }
+        ],
+        "team_win_rate": 0.5,
+        "team_synergy_score": 0.5,
+        "team_counter_score": 0.5,
+        "synergy_description": "Antimage is synergistic with Axe",
+        "counter_description": "Antimage is countered by Bane",
+        "timing_and_strategy": {
+            "early_game": "Focus on securing farm and objectives",
+            "mid_game": "Look for team fights and map control",
+            "late_game": "Push for high ground and end the game"
+        },
+        "conclusion": "Team composition has strong synergies and good counters"
+    },
+    "dire": {
+        // Same structure as radiant team analysis
+    }
 }
 ```
 
-## How It Works
+### Analysis Methodology
 
-### Win Rate Calculation
+The analyzer uses several factors to calculate win probabilities:
 
 1. **Individual Hero Win Rates**
-```
-individual_score = (win_rate - 0.5) * weight
-```
+   - Base win rate for each hero
+   - Performance in current meta
+   - Recent match history
 
 2. **Team Synergy**
-```
-synergy_score = average(winRateHeroId1, winRateHeroId2) - 0.5
-```
+   - Hero combination effectiveness
+   - Complementary abilities
+   - Role distribution
+   - Team fight potential
 
-3. **Counter Advantage**
-```
-counter_score = winRateHeroId1 - 0.5 (if HeroId1 is in Radiant)
-counter_score = 0.5 - winRateHeroId1 (if HeroId1 is in Dire)
-```
+3. **Counter Advantages**
+   - Hero counter relationships
+   - Lane matchups
+   - Itemization counters
+   - Ability counters
 
-4. **Final Score**
-```
-team_draft_score = avg_individual_win_rate + total_team_synergy_score + total_counter_advantage_score
-```
+4. **Final Score Calculation**
+   - Weighted combination of all factors
+   - Normalized to probability range
+   - Adjusted for team composition
 
 ### Key Parameters
 
-#### 1. Weights
-Weights control the relative influence of different components:
-```python
-weight_individual = 1.0  # Individual hero performance
-weight_synergy = 0.5    # Team synergy
-weight_counter = 0.8    # Counter picks
+The following parameters can be adjusted in the `.env` file:
+
+- `WEIGHT_INDIVIDUAL`: Weight for individual hero performance (default: 1.0)
+- `WEIGHT_SYNERGY`: Weight for team synergy (default: 1.0)
+- `WEIGHT_COUNTER`: Weight for counter advantages (default: 1.0)
+- `FACTOR`: Scaling factor for probability calculation (default: 2.0)
+
+### STRATZ API Integration
+
+The analyzer uses the STRATZ API to fetch hero matchup data. The API endpoint used is:
+```
+https://api.stratz.com/api/v1
 ```
 
-#### 2. Factor
-Controls the sensitivity of win probability to score differences:
-```python
-def win_probability(score_radiant, score_dire):
-    diff = score_radiant - score_dire
-    return 1 / (1 + exp(-diff * factor))
-```
-
-Example probabilities with different factors:
-```
-Score Difference | Factor | Win Probability
-0.5             | 1      | 62%
-0.5             | 2      | 73%
-0.5             | 5      | 92%
-```
-
-## STRATZ API Integration
-
-### API Requirements
-- Endpoint: https://api.stratz.com/graphql
-- Required header: `User-Agent: STRATZ_API`
-
-### GraphQL Query
+Required GraphQL query structure:
 ```graphql
-query {
+{
   heroStats {
-    heroVsHeroMatchup(heroId: 86) {
+    heroVsHeroMatchup(heroId: $heroId) {
       advantage {
         with {
           heroId1
           heroId2
           winRateHeroId1
           winRateHeroId2
-          winsAverage
         }
         vs {
           heroId1
           heroId2
           winRateHeroId1
           winRateHeroId2
-          winsAverage
         }
       }
       disadvantage {
@@ -156,17 +175,36 @@ query {
           heroId2
           winRateHeroId1
           winRateHeroId2
-          winsAverage
         }
         vs {
           heroId1
           heroId2
           winRateHeroId1
           winRateHeroId2
-          winsAverage
         }
       }
     }
   }
 }
 ```
+
+## Error Handling
+
+The API provides detailed error responses for various scenarios:
+
+- Invalid hero IDs
+- Duplicate heroes in draft
+- API key issues
+- Server errors
+
+Example error response:
+```json
+{
+    "error": "Invalid hero IDs: [999, 1000]",
+    "status_code": 400
+}
+```
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
