@@ -283,6 +283,64 @@ class TeamAnalyzer:
 
         return radiant_prob, dire_prob, confidence
 
+    def format_team_with_roles(self, team: List[int]) -> List[str]:
+        """
+        Assigns each hero in the team to one of the EXPECTED_ROLES based on their role levels.
+        Tries to make the best hero-role assignments so that each role is covered by one hero.
+        """
+        formatted_team = []
+        assigned_heroes = set()
+        assigned_roles = set()
+
+        # Gather and sort roles per hero
+        hero_roles = []
+        for hero_id in team:
+            hero_data = next((h for h in self.hero_directory if h["id"] == hero_id), None)
+            if hero_data:
+                hero_roles.append({
+                    'hero': hero_data,
+                    'roles': {r["roleId"]: r["level"] for r in hero_data["roles"]}
+                })
+            else:
+                formatted_team.append(f"Hero_{hero_id} (Unknown)")
+
+        # Build candidate list of (hero, role, level)
+        role_candidates = []
+        for hr in hero_roles:
+            hero = hr["hero"]
+            for role in EXPECTED_ROLES:
+                level = hr["roles"].get(role, 0)
+                if level > 0:
+                    role_candidates.append((hero, role, level))
+
+        # Sort all possible assignments by role level descending
+        role_candidates.sort(key=lambda x: x[2], reverse=True)
+
+        hero_role_map = {}
+        for hero, role, level in role_candidates:
+            if hero['id'] not in assigned_heroes and role not in assigned_roles:
+                hero_role_map[hero['id']] = role
+                assigned_heroes.add(hero['id'])
+                assigned_roles.add(role)
+
+        # Assign remaining heroes to their highest available role
+        for hr in hero_roles:
+            hero = hr["hero"]
+            if hero['id'] in hero_role_map:
+                assigned_role = hero_role_map[hero['id']]
+            else:
+                # Pick highest level unassigned role
+                sorted_roles = sorted(hr["roles"].items(), key=lambda x: x[1], reverse=True)
+                assigned_role = next((r for r, _ in sorted_roles if r not in assigned_roles), None)
+                if assigned_role:
+                    assigned_roles.add(assigned_role)
+                else:
+                    assigned_role = sorted_roles[0][0] if sorted_roles else "unknown"
+
+            formatted_team.append(f"{hero['displayName']} ({assigned_role})")
+
+        return formatted_team
+
     def analyze_teams(self, radiant_team: List[int], dire_team: List[int]) -> Dict[str, Any]:
         """
         Perform a complete analysis of both teams.
@@ -298,6 +356,7 @@ class TeamAnalyzer:
                 - Counter scores
                 - Role scores
                 - Overall confidence in the analysis
+                - Formatted team information with hero names and best roles
         """
         self.missing_matchup_count = 0
         self.total_matchup_count = 0
@@ -313,7 +372,9 @@ class TeamAnalyzer:
             "dire_synergy": self.calculate_team_synergy(dire_team),
             "dire_counters": self.calculate_team_counters(dire_team, radiant_team),
             "dire_role_score": self.calculate_role_score(dire_team),
-            "confidence": confidence
+            "confidence": confidence,
+            "radiant_team": self.format_team_with_roles(radiant_team),
+            "dire_team": self.format_team_with_roles(dire_team)
         }
 
 if __name__ == "__main__":
@@ -327,13 +388,13 @@ if __name__ == "__main__":
 
     print("\nTeam Analysis Results:")
     print("=" * 50)
-    print("Radiant Team:")
+    print(f"Radiant Team: {results['radiant_team']}")
     print(f"Win Probability: {results['radiant_win_probability']:.2%}")
     print(f"Synergy: {results['radiant_synergy']:.2%}")
     print(f"Counters: {results['radiant_counters']:.2%}")
     print(f"Role Score: {results['radiant_role_score']:.2%}")
 
-    print("\nDire Team:")
+    print(f"\nDire Team: {results['dire_team']}")
     print(f"Win Probability: {results['dire_win_probability']:.2%}")
     print(f"Synergy: {results['dire_synergy']:.2%}")
     print(f"Counters: {results['dire_counters']:.2%}")
