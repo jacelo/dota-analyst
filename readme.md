@@ -1,210 +1,90 @@
-# Dota 2 Draft Analyzer
+# Dota 2 Team Analyzer API
 
-A tool for analyzing Dota 2 draft compositions and calculating win probabilities using the STRATZ API.
+A FastAPI-based service that analyzes Dota 2 team compositions and predicts match outcomes based on hero matchups, team synergy, and role distribution.
 
 ## Features
 
-- Win probability calculations for team compositions
-- Individual hero analysis including:
-  - Win rates
-  - Synergy scores
-  - Counter scores
-  - Detailed matchup data
-- Team composition analysis including:
-  - Overall team win rates
-  - Team synergy scores
-  - Team counter scores
-  - Strategic recommendations
-- REST API integration with FastAPI
-- Detailed error handling and validation
+- Analyzes team compositions for both Radiant and Dire teams
+- Calculates win probabilities based on:
+  - Hero matchups
+  - Team synergy
+  - Counter picks
+  - Role distribution
+- Provides confidence scores for predictions
+- Supports both local development and serverless deployment
 
-## Installation
+## Setup
 
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/dota-analyst.git
-cd dota-analyst
-```
-
-2. Install dependencies:
+1. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Create a `.env` file in the project root with your STRATZ API key:
-```
-REMOVED=your_api_key_here
-STRATZ_API_URL=https://api.stratz.com/api/v1
-WEIGHT_INDIVIDUAL=1.0
-WEIGHT_SYNERGY=1.0
-WEIGHT_COUNTER=1.0
-FACTOR=2.0
-```
-
-## Usage
-
-### Running the API Server
-
-Start the FastAPI server using Uvicorn:
+2. Run the API locally:
 ```bash
 uvicorn api:app --reload
 ```
 
 The API will be available at `http://localhost:8000`
 
-### API Endpoints
+## API Usage
 
-#### POST /analyze-draft
-Analyzes a draft and returns detailed win probabilities and analysis.
+### Analyze Teams
 
-Request body:
-```json
-{
-    "radiant_ids": [1, 2, 3, 4, 5],
-    "dire_ids": [6, 7, 8, 9, 10]
-}
+```bash
+curl -X POST "http://localhost:8000/analyze" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "radiant_team": [1, 2, 3, 4, 5],
+           "dire_team": [6, 7, 8, 9, 10]
+         }'
 ```
 
 Response:
 ```json
 {
-    "radiant": {
-        "heroes": [
-            {
-                "id": 1,
-                "name": "Antimage",
-                "win_rate": 0.5,
-                "synergy_score": 0.5,
-                "counter_score": 0.5,
-                "synergies": [
-                    {
-                        "hero_id": 2,
-                        "win_rate": 0.5
-                    }
-                ],
-                "counters": [
-                    {
-                        "hero_id": 3,
-                        "win_rate": 0.5
-                    }
-                ]
-            }
-        ],
-        "team_win_rate": 0.5,
-        "team_synergy_score": 0.5,
-        "team_counter_score": 0.5,
-        "synergy_description": "Antimage is synergistic with Axe",
-        "counter_description": "Antimage is countered by Bane",
-        "timing_and_strategy": {
-            "early_game": "Focus on securing farm and objectives",
-            "mid_game": "Look for team fights and map control",
-            "late_game": "Push for high ground and end the game"
-        },
-        "conclusion": "Team composition has strong synergies and good counters"
-    },
-    "dire": {
-        // Same structure as radiant team analysis
-    }
+    "radiant_win_probability": 0.65,
+    "radiant_synergy": 0.75,
+    "radiant_counters": 0.60,
+    "radiant_role_score": 0.85,
+    "dire_win_probability": 0.35,
+    "dire_synergy": 0.65,
+    "dire_counters": 0.40,
+    "dire_role_score": 0.70,
+    "confidence": 0.90
 }
 ```
 
-### Analysis Methodology
+### API Documentation
 
-The analyzer uses several factors to calculate win probabilities:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
 
-1. **Individual Hero Win Rates**
-   - Base win rate for each hero
-   - Performance in current meta
-   - Recent match history
+## Configuration
 
-2. **Team Synergy**
-   - Hero combination effectiveness
-   - Complementary abilities
-   - Role distribution
-   - Team fight potential
+The analysis can be tuned by modifying the following parameters in `team_analyzer.py`:
 
-3. **Counter Advantages**
-   - Hero counter relationships
-   - Lane matchups
-   - Itemization counters
-   - Ability counters
+- `ROLE_BALANCE_WEIGHTS`: Weights for different hero roles
+- `WIN_PROBABILITY_WEIGHTS`: Weights for different factors in win probability calculation
+- `SCORE_AMPLIFICATION_FACTOR`: Base amplification factor for scores
+- `TEAM_SYNERGY_AMPLIFICATION_FACTOR`: Amplification factor for team synergy
+- `TEAM_COUNTERS_AMPLIFICATION_FACTOR`: Amplification factor for counter picks
 
-4. **Final Score Calculation**
-   - Weighted combination of all factors
-   - Normalized to probability range
-   - Adjusted for team composition
+## Project Structure
 
-### Key Parameters
-
-The following parameters can be adjusted in the `.env` file:
-
-- `WEIGHT_INDIVIDUAL`: Weight for individual hero performance (default: 1.0)
-- `WEIGHT_SYNERGY`: Weight for team synergy (default: 1.0)
-- `WEIGHT_COUNTER`: Weight for counter advantages (default: 1.0)
-- `FACTOR`: Scaling factor for probability calculation (default: 2.0)
-
-### STRATZ API Integration
-
-The analyzer uses the STRATZ API to fetch hero matchup data. The API endpoint used is:
 ```
-https://api.stratz.com/api/v1
+dota-analyst/
+├── api.py              # FastAPI application
+├── team_analyzer.py    # Core analysis logic
+├── data_manager.py     # Data loading and management
+├── requirements.txt    # Python dependencies
+├── vercel.json        # Vercel configuration
+└── README.md          # This file
 ```
 
-Required GraphQL query structure:
-```graphql
-{
-  heroStats {
-    heroVsHeroMatchup(heroId: $heroId) {
-      advantage {
-        with {
-          heroId1
-          heroId2
-          winRateHeroId1
-          winRateHeroId2
-        }
-        vs {
-          heroId1
-          heroId2
-          winRateHeroId1
-          winRateHeroId2
-        }
-      }
-      disadvantage {
-        with {
-          heroId1
-          heroId2
-          winRateHeroId1
-          winRateHeroId2
-        }
-        vs {
-          heroId1
-          heroId2
-          winRateHeroId1
-          winRateHeroId2
-        }
-      }
-    }
-  }
-}
-```
+## Notes
 
-## Error Handling
-
-The API provides detailed error responses for various scenarios:
-
-- Invalid hero IDs
-- Duplicate heroes in draft
-- API key issues
-- Server errors
-
-Example error response:
-```json
-{
-    "error": "Invalid hero IDs: [999, 1000]",
-    "status_code": 400
-}
-```
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+- The API uses serverless functions on Vercel, so the first request after a cold start will be slower
+- Data is loaded into the `/tmp` directory in the serverless environment
+- The analysis takes into account hero matchups, team synergy, and role distribution
+- Confidence scores indicate the reliability of the prediction based on available data

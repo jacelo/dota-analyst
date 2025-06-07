@@ -1,4 +1,5 @@
 venv/
 .env
 .DS_Store
-/chroma_langchain_db
+chroma_langchain_db/
+data/
