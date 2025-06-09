@@ -85,6 +85,32 @@ def _extract_json_from_response(response_text: str, part: str) -> Dict[str, Any]
             "raw_response": response_text
         }
 
+def _clean_llm_response(response_text: str) -> str:
+    """Clean up LLM response by removing thinking process and meta-commentary."""
+    if not response_text or response_text.strip() == "NO_OUTPUT":
+        return ""
+
+    # Remove content between <think> tags
+    response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL)
+
+    # Remove any remaining thinking process markers
+    response_text = re.sub(r'<think>.*?$', '', response_text, flags=re.DOTALL)
+    response_text = re.sub(r'^.*?</think>', '', response_text, flags=re.DOTALL)
+
+    # Remove any meta-commentary about thinking or analysis
+    response_text = re.sub(r'Okay,.*?(?=\n\n|\Z)', '', response_text, flags=re.DOTALL)
+    response_text = re.sub(r'Let me.*?(?=\n\n|\Z)', '', response_text, flags=re.DOTALL)
+
+    # Clean up any extra whitespace
+    response_text = re.sub(r'\n\s*\n\s*\n', '\n\n', response_text)
+    response_text = response_text.strip()
+
+    # If after cleaning we have no content, return a default message
+    if not response_text:
+        return "Analysis not available. Please try again."
+
+    return response_text
+
 def generate_insight_part(part: str, context: str, team_analysis: str, **kwargs) -> Dict[str, Any]:
     """Generate a specific part of the insights in a separate process."""
     process_start_time = time.time()
@@ -94,8 +120,8 @@ def generate_insight_part(part: str, context: str, team_analysis: str, **kwargs)
 
         # Create prompt template for this part
         templates = {
-            "overall_assessment": """
-            You are a Dota 2 expert analyst. Provide a comprehensive summary of the 5v5 matchup.
+            "radiant_synergy_analysis": """
+            You are a Dota 2 expert analyst. Analyze the synergy and strategy for the Radiant team.
             Consider the team analysis and context provided.
 
             Context from Vector Store:
@@ -104,13 +130,21 @@ def generate_insight_part(part: str, context: str, team_analysis: str, **kwargs)
             Team Analysis:
             {team_analysis}
 
-            Provide a summary of the matchup, highlighting key factors that will influence the game outcome.
-            Only reference heroes that are actually in the teams.
-            Format your response as a single paragraph.
+            Analyze the Radiant team ({team_heroes}) and provide a comprehensive analysis focusing on:
+            1. Team synergy and how the heroes work together
+            2. Strategic approach and playstyle
+            3. Key strengths and weaknesses of the composition
+
+            IMPORTANT INSTRUCTIONS:
+            - Provide your analysis in a single, clear paragraph
+            - Do not include any thinking process, notes, or meta-commentary
+            - Do not use <think> tags or similar markers
+            - Start your response directly with the analysis
+            - Focus on explaining how the heroes work together and what makes this team composition effective or challenging
             """,
 
-            "team_analysis": """
-            You are a Dota 2 expert analyst. Analyze the {team_side} team ({team_heroes}) and provide a comprehensive analysis on the following:
+            "dire_synergy_analysis": """
+            You are a Dota 2 expert analyst. Analyze the synergy and strategy for the Dire team.
             Consider the team analysis and context provided.
 
             Context from Vector Store:
@@ -119,29 +153,21 @@ def generate_insight_part(part: str, context: str, team_analysis: str, **kwargs)
             Team Analysis:
             {team_analysis}
 
-            Analyze the {team_side} team ({team_heroes}) and provide a comprehensive analysis on the following:
-            1. List of specific strengths
-            2. List of specific weaknesses
-            3. List of key heroes and why they are crucial
-            4. Specific strategic recommendations
+            Analyze the Dire team ({team_heroes}) and provide a comprehensive analysis focusing on:
+            1. Team synergy and how the heroes work together
+            2. Strategic approach and playstyle
+            3. Key strengths and weaknesses of the composition
 
-            Format your response in JSON:
-            {{
-                "strengths": ["list of strengths"],
-                "weaknesses": ["list of weaknesses"],
-                "key_heroes": [
-                    {{
-                        "name": "hero name",
-                        "role": "hero role",
-                        "strength": "why this hero is crucial"
-                    }}
-                ],
-                "strategy": "strategic recommendations"
-            }}
+            IMPORTANT INSTRUCTIONS:
+            - Provide your analysis in a single, clear paragraph
+            - Do not include any thinking process, notes, or meta-commentary
+            - Do not use <think> tags or similar markers
+            - Start your response directly with the analysis
+            - Focus on explaining how the heroes work together and what makes this team composition effective or challenging
             """,
 
-            "matchup_insights": """
-            You are a Dota 2 expert analyst. Analyze the matchup dynamics between the teams.
+            "timing_strategy_analysis": """
+            You are a Dota 2 expert analyst. Analyze the timing and strategy phases of the matchup.
             Consider the team analysis and context provided.
 
             Context from Vector Store:
@@ -150,25 +176,27 @@ def generate_insight_part(part: str, context: str, team_analysis: str, **kwargs)
             Team Analysis:
             {team_analysis}
 
-            Provide detailed and comprehensive analysis of:
-            1. Early game objectives, lane matchups, and key timings
-            2. Mid-game power spikes, objectives, and team fight strategies
-            3. Late game scaling, win conditions, and team fight execution
-            4. Key hero counters between the teams
-            5. Team fight analysis
+            Provide a comprehensive analysis of the matchup timing phases in three clear paragraphs:
 
-            Format your response in JSON:
-            {{
-                "early_game": "early game analysis",
-                "mid_game": "mid game analysis",
-                "late_game": "late game analysis",
-                "key_counters": ["list of key counters"],
-                "team_fight_analysis": "team fight analysis"
-            }}
+            Early Game (0-15 minutes):
+            Analyze the lane matchups, objectives, and key timings. Explain which team has the advantage and why.
+
+            Mid Game (15-30 minutes):
+            Analyze the power spikes, objectives, and team fight strategies. Explain how each team should approach this phase.
+
+            Late Game (30+ minutes):
+            Analyze the scaling, win conditions, and team fight execution. Explain which team has the advantage and what they need to do to win.
+
+            IMPORTANT INSTRUCTIONS:
+            - Format each phase as a separate paragraph with clear headings
+            - Do not include any thinking process, notes, or meta-commentary
+            - Do not use <think> tags or similar markers
+            - Start your response directly with the analysis
+            - Make sure each phase is clearly labeled and separated
             """,
 
-            "prediction": """
-            You are a Dota 2 expert analyst. Predict the outcome of the matchup.
+            "counter_analysis": """
+            You are a Dota 2 expert analyst. Analyze the hero counter dynamics between the teams.
             Consider the team analysis and context provided.
 
             Context from Vector Store:
@@ -177,17 +205,60 @@ def generate_insight_part(part: str, context: str, team_analysis: str, **kwargs)
             Team Analysis:
             {team_analysis}
 
-            Make a prediction about the match outcome, considering all factors analyzed. Explain in detail your reasoning focusing on the team compositions, synergy, counters, win rates and previous matches.
-            Format your response in JSON:
-            {{
-                "expected_winner": "Radiant or Dire",
-                "reasoning": "detailed reasoning for the prediction"
-            }}
+            Provide a comprehensive analysis of the counter dynamics between the teams, covering:
+
+            1. Direct Hero Counters:
+            Analyze specific hero matchups and how they counter each other.
+
+            2. Team Composition Counters:
+            Explain how one team's composition counters the other's overall strategy.
+
+            3. Strategic Counters:
+            Describe how each team can counter the other's strategic approach.
+
+            IMPORTANT INSTRUCTIONS:
+            - Format your analysis in clear paragraphs, one for each type of counter
+            - Do not include any thinking process, notes, or meta-commentary
+            - Do not use <think> tags or similar markers
+            - Start your response directly with the analysis
+            - Focus on explaining the impact of these counters on the game
+            """,
+
+            "conclusion": """
+            You are a Dota 2 expert analyst. Provide a comprehensive conclusion of the matchup.
+            Consider the team analysis and context provided.
+
+            Context from Vector Store:
+            {context}
+
+            Team Analysis:
+            {team_analysis}
+
+            Provide a detailed conclusion of the matchup in a clear, well-structured format:
+
+            1. Overall Team Composition Analysis:
+            Analyze the strengths and weaknesses of both team compositions.
+
+            2. Key Factors:
+            Explain the most important factors that will influence the game outcome.
+
+            3. Win Conditions:
+            Describe what each team needs to do to win the game.
+
+            4. Final Assessment:
+            Provide a final assessment of the matchup and which team has the advantage.
+
+            IMPORTANT INSTRUCTIONS:
+            - Format your conclusion in clear paragraphs, with each section providing detailed insights
+            - Do not include any thinking process, notes, or meta-commentary
+            - Do not use <think> tags or similar markers
+            - Start your response directly with the analysis
+            - Make sure each section is clearly labeled and separated
             """
         }
 
         prompt = PromptTemplate(
-            input_variables=["context", "team_analysis"] + (["team_side", "team_heroes"] if part == "team_analysis" else []),
+            input_variables=["context", "team_analysis"] + (["team_side", "team_heroes"] if "synergy" in part else []),
             template=templates[part]
         )
 
@@ -200,12 +271,33 @@ def generate_insight_part(part: str, context: str, team_analysis: str, **kwargs)
         })
         response_text = response.text()
 
-        # Extract and parse JSON using the new robust parser
-        result = _extract_json_from_response(response_text, part)
+        # Clean up the response
+        cleaned_response = _clean_llm_response(response_text)
 
+        # Validate the response
+        if not cleaned_response:
+            # Try one more time with a fallback prompt
+            fallback_prompt = f"""
+            You are a Dota 2 expert analyst. Please provide a brief analysis for the {part} section.
+            Focus on the key points and keep it concise.
+
+            Context from Vector Store:
+            {context}
+
+            Team Analysis:
+            {team_analysis}
+
+            Provide a clear, direct analysis without any thinking process or meta-commentary.
+            """
+            fallback_response = llm.invoke(fallback_prompt)
+            cleaned_response = _clean_llm_response(fallback_response.text())
+
+        # For non-JSON responses, we'll return the text directly
         process_end_time = time.time()
-        result["process_time"] = process_end_time - process_start_time
-        return result
+        return {
+            "analysis": cleaned_response,
+            "process_time": process_end_time - process_start_time
+        }
     except Exception as e:
         process_end_time = time.time()
         return {
@@ -255,9 +347,37 @@ class InsightGenerator:
 
     def _create_rag_chains(self) -> Dict[str, Any]:
         """Create separate RAG chains for different aspects of the analysis."""
+        # Define the synergy analysis template once
+        synergy_template = """
+        You are a Dota 2 expert analyst. Analyze the synergy and strategy for the {team_side} team.
+        Consider the team analysis and context provided.
+
+        Context from Vector Store:
+        {context}
+
+        Team Analysis:
+        {team_analysis}
+
+        Analyze the {team_side} team ({team_heroes}) and provide a comprehensive analysis focusing on:
+        1. Team synergy and how the heroes work together
+        2. Strategic approach and playstyle
+        3. Key strengths and weaknesses of the composition
+
+        Only return the following JSON. Do not include any other explanation or commentary.
+
+        Format your response in JSON:
+        {{
+            "strategy": "Detailed strategic analysis focusing on team synergy and approach",
+            "strengths": ["List of key strengths"],
+            "weaknesses": ["List of key weaknesses"]
+        }}
+        """
+
         templates = {
-            "overall_assessment": """
-            You are a Dota 2 expert analyst. Provide a comprehensive summary of the 5v5 matchup.
+            "radiant_synergy_analysis": synergy_template,
+            "dire_synergy_analysis": synergy_template,
+            "timing_strategy_analysis": """
+            You are a Dota 2 expert analyst. Analyze the timing and strategy phases of the matchup.
             Consider the team analysis and context provided.
 
             Context from Vector Store:
@@ -266,38 +386,23 @@ class InsightGenerator:
             Team Analysis:
             {team_analysis}
 
-            Provide a summary of the matchup, highlighting key factors that will influence the game outcome.
-            Only reference heroes that are actually in the teams.
-            Format your response as a single paragraph.
-            """,
+            Provide a comprehensive analysis of the matchup timing phases:
+            1. Early game (0-15 minutes): Lane matchups, objectives, and key timings
+            2. Mid game (15-30 minutes): Power spikes, objectives, and team fight strategies
+            3. Late game (30+ minutes): Scaling, win conditions, and team fight execution
 
-            "team_analysis": """
-            You are a Dota 2 expert analyst. Analyze the strengths, weaknesses, key heroes, and strategy for {team_side} team.
-            Consider the team analysis and context provided.
-
-            Context from Vector Store:
-            {context}
-
-            Team Analysis:
-            {team_analysis}
-
-            Analyze the {team_side} team ({team_heroes}) and provide a comprehensive analysis on the following:
-            1. List of specific strengths
-            2. List of specific weaknesses
-            3. List of key heroes and why they are crucial
-            4. Specific strategic recommendations
+            Only return the following JSON. Do not include any other explanation or commentary.
 
             Format your response in JSON:
             {{
-                "strengths": ["list of strengths"],
-                "weaknesses": ["list of weaknesses"],
-                "key_heroes": ["list of key heroes with explanations"],
-                "strategy": "strategic recommendations"
+                "early_game": "Early game analysis focusing on laning and objectives",
+                "mid_game": "Mid game analysis focusing on power spikes and team fights",
+                "late_game": "Late game analysis focusing on scaling and win conditions"
             }}
             """,
 
-            "matchup_insights": """
-            You are a Dota 2 expert analyst. Analyze the matchup dynamics between the teams.
+            "counter_analysis": """
+            You are a Dota 2 expert analyst. Analyze the hero counter dynamics between the teams.
             Consider the team analysis and context provided.
 
             Context from Vector Store:
@@ -306,25 +411,23 @@ class InsightGenerator:
             Team Analysis:
             {team_analysis}
 
-            Provide detailed and comprehensive analysis of:
-            1. Early game objectives, lane matchups, and key timings
-            2. Mid-game power spikes, objectives, and team fight strategies
-            3. Late game scaling, win conditions, and team fight execution
-            4. Key hero counters between the teams
-            5. Team fight analysis
+            Analyze the key hero counters between the teams, focusing on:
+            1. Direct hero counters (e.g., specific hero matchups)
+            2. Team composition counters (e.g., how one team's composition counters the other)
+            3. Strategic counters (e.g., how one team's strategy can counter the other's)
+
+            Only return the following JSON. Do not include any other explanation or commentary.
 
             Format your response in JSON:
             {{
-                "early_game": "early game analysis",
-                "mid_game": "mid game analysis",
-                "late_game": "late game analysis",
-                "key_counters": ["list of key counters"],
-                "team_fight_analysis": "team fight analysis"
+                "direct_counters": ["List of specific hero counter matchups"],
+                "composition_counters": ["List of team composition counter dynamics"],
+                "strategic_counters": ["List of strategic counter opportunities"]
             }}
             """,
 
-            "prediction": """
-            You are a Dota 2 expert analyst. Predict the outcome of the matchup.
+            "conclusion": """
+            You are a Dota 2 expert analyst. Provide a comprehensive conclusion of the matchup.
             Consider the team analysis and context provided.
 
             Context from Vector Store:
@@ -333,18 +436,27 @@ class InsightGenerator:
             Team Analysis:
             {team_analysis}
 
-            Make a prediction about the match outcome, considering all factors analyzed. Explain in detail your reasoning focusing on the team compositions, synergy, counters, win rates and previous matches.
+            Provide a detailed conclusion of the matchup, focusing on:
+            1. Overall team composition strengths and weaknesses
+            2. Key factors that will influence the game outcome
+            3. Critical moments and win conditions for each team
+            4. Final assessment of the matchup
+
+            Only return the following JSON. Do not include any other explanation or commentary.
+
             Format your response in JSON:
             {{
-                "expected_winner": "Radiant or Dire",
-                "reasoning": "detailed reasoning for the prediction"
+                "composition_assessment": "Analysis of overall team compositions",
+                "key_factors": ["List of key factors that will influence the game"],
+                "win_conditions": ["List of critical moments and win conditions"],
+                "conclusion": "Final assessment of the matchup"
             }}
             """
         }
 
         return {
             key: PromptTemplate(
-                input_variables=["context", "team_analysis"] + (["team_side", "team_heroes"] if key == "team_analysis" else []),
+                input_variables=["context", "team_analysis", "team_side", "team_heroes"] if "synergy" in key else ["context", "team_analysis"],
                 template=template
             ) | self.llm
             for key, template in templates.items()
@@ -376,8 +488,17 @@ class InsightGenerator:
             Dict[str, Any]: Formatted team data
         """
         prefix = "radiant" if is_radiant else "dire"
+        team_data = analysis[f"{prefix}_team"]
+
+        # Convert team data to list of hero names
+        team_heroes = []
+        for hero_data in team_data:
+            hero = next((h for h in self.hero_directory if h["id"] == hero_data["hero_id"]), None)
+            if hero:
+                team_heroes.append(hero["displayName"])
+
         return {
-            "team": analysis[f"{prefix}_team"],
+            "team": team_heroes,  # Now a list of hero names
             "win_probability": analysis[f"{prefix}_win_probability"],
             "synergy": analysis[f"{prefix}_synergy"],
             "counters": analysis[f"{prefix}_counters"],
@@ -471,93 +592,146 @@ class InsightGenerator:
             "total_time": None
         }
 
-        # Get team analysis
-        analysis_start = time.time()
-        analysis = self.team_analyzer.analyze_teams(radiant_team, dire_team)
-        timing_info["team_analysis_time"] = time.time() - analysis_start
+        try:
+            # Get team analysis
+            analysis_start = time.time()
+            analysis = self.team_analyzer.analyze_teams(radiant_team, dire_team)
+            timing_info["team_analysis_time"] = time.time() - analysis_start
 
-        # Format team data
-        radiant_data = self._format_team_data(radiant_team, analysis, True)
-        dire_data = self._format_team_data(dire_team, analysis, False)
+            # Format team data
+            radiant_data = self._format_team_data(radiant_team, analysis, True)
+            dire_data = self._format_team_data(dire_team, analysis, False)
 
-        # Get relevant context
-        context_start = time.time()
-        context = self._get_relevant_context(radiant_team, dire_team)
-        timing_info["context_time"] = time.time() - context_start
+            # Get relevant context
+            context_start = time.time()
+            context = self._get_relevant_context(radiant_team, dire_team)
+            timing_info["context_time"] = time.time() - context_start
 
-        # Format team analysis
-        team_analysis = f"""
-        Radiant Team: {', '.join(radiant_data['team'])}
-        - Win Probability: {radiant_data['win_probability']:.1%}
-        - Team Synergy: {radiant_data['synergy']:.1%}
-        - Counter Advantage: {radiant_data['counters']:.1%}
-        - Role Distribution: {radiant_data['role_score']:.1%}
+            # Format team analysis
+            team_analysis = f"""
+            Radiant Team: {', '.join(radiant_data['team'])}
+            - Win Probability: {radiant_data['win_probability']:.1%}
+            - Team Synergy: {radiant_data['synergy']:.1%}
+            - Counter Advantage: {radiant_data['counters']:.1%}
+            - Role Distribution: {radiant_data['role_score']:.1%}
 
-        Dire Team: {', '.join(dire_data['team'])}
-        - Win Probability: {dire_data['win_probability']:.1%}
-        - Team Synergy: {dire_data['synergy']:.1%}
-        - Counter Advantage: {dire_data['counters']:.1%}
-        - Role Distribution: {dire_data['role_score']:.1%}
-        """
+            Dire Team: {', '.join(dire_data['team'])}
+            - Win Probability: {dire_data['win_probability']:.1%}
+            - Team Synergy: {dire_data['synergy']:.1%}
+            - Counter Advantage: {dire_data['counters']:.1%}
+            - Role Distribution: {dire_data['role_score']:.1%}
+            """
 
-        # Prepare tasks for parallel processing
-        tasks = [
-            ("overall_assessment", context, team_analysis),
-            ("team_analysis", context, team_analysis, "Radiant", ', '.join(radiant_data['team'])),
-            ("team_analysis", context, team_analysis, "Dire", ', '.join(dire_data['team'])),
-            ("matchup_insights", context, team_analysis),
-            ("prediction", context, team_analysis)
-        ]
+            # Prepare tasks for parallel processing
+            tasks = [
+                ("radiant_synergy_analysis", context, team_analysis, {"team_side": "Radiant", "team_heroes": ', '.join(radiant_data['team'])}),
+                ("dire_synergy_analysis", context, team_analysis, {"team_side": "Dire", "team_heroes": ', '.join(dire_data['team'])}),
+                ("timing_strategy_analysis", context, team_analysis, {}),
+                ("counter_analysis", context, team_analysis, {}),
+                ("conclusion", context, team_analysis, {})
+            ]
 
-        # Generate insights in parallel using multiprocessing
-        timing_info["process_start"] = time.time()
-        results = []
-        for task in tasks:
-            if len(task) == 3:
-                part, ctx, analysis = task
-                result = self.pool.apply_async(generate_insight_part, (part, ctx, analysis))
-            else:
-                part, ctx, analysis, side, heroes = task
-                result = self.pool.apply_async(generate_insight_part, (part, ctx, analysis),
-                                             kwds={"team_side": side, "team_heroes": heroes})
-            results.append((task[0], result))
+            # Generate insights in parallel using multiprocessing
+            timing_info["process_start"] = time.time()
+            results = []
+            for task in tasks:
+                part, ctx, analysis, kwargs = task
+                result = self.pool.apply_async(generate_insight_part, (part, ctx, analysis), kwds=kwargs)
+                results.append((task[0], result))
 
-        # Collect results and timing information
-        processed_results = []
-        process_times = {}
-        for part, result in results:
-            processed_result = result.get()  # This is where we wait for each process
-            processed_results.append(processed_result)
-            process_times[part] = processed_result.pop("process_time", None)
+            # Collect results and timing information
+            processed_results = []
+            process_times = {}
+            for part, result in results:
+                processed_result = result.get()  # This is where we wait for each process
+                if "error" in processed_result:
+                    raise Exception(f"Error in {part}: {processed_result['error']}")
+                processed_results.append(processed_result)
+                process_times[part] = processed_result.pop("process_time", None)
 
-        timing_info["process_end"] = time.time()
-        timing_info["total_time"] = time.time() - timing_info["analysis_start"]
+            timing_info["process_end"] = time.time()
+            timing_info["total_time"] = time.time() - timing_info["analysis_start"]
 
-        # Calculate timing breakdowns
-        timing_breakdown = {
-            "total_execution": timing_info["total_time"],
-            "team_analysis": timing_info["team_analysis_time"],
-            "context_generation": timing_info["context_time"],
-            "parallel_processing": timing_info["process_end"] - timing_info["process_start"],
-            "per_process": process_times,
-            "overhead": timing_info["total_time"] - (
-                timing_info["team_analysis_time"] +
-                timing_info["context_time"] +
-                (timing_info["process_end"] - timing_info["process_start"])
-            )
-        }
+            # Calculate timing breakdowns
+            timing_breakdown = {
+                "total_execution": timing_info["total_time"],
+                "team_analysis": timing_info["team_analysis_time"],
+                "context_generation": timing_info["context_time"],
+                "parallel_processing": timing_info["process_end"] - timing_info["process_start"],
+                "per_process": process_times,
+                "overhead": timing_info["total_time"] - (
+                    timing_info["team_analysis_time"] +
+                    timing_info["context_time"] +
+                    (timing_info["process_end"] - timing_info["process_start"])
+                )
+            }
 
-        # Combine results
-        insights = {
-            "overall_assessment": processed_results[0].get("overall_assessment", processed_results[0].get("error", "Failed to generate overall assessment")),
-            "radiant_analysis": processed_results[1],
-            "dire_analysis": processed_results[2],
-            "matchup_insights": processed_results[3],
-            "prediction": processed_results[4],
-            "timing": timing_breakdown
-        }
+            # Debug logging
+            print("Processed Results:")
+            for i, result in enumerate(processed_results):
+                print(f"Result {i}: {result.keys()}")
 
-        return insights
+            # Combine results to match API response structure
+            insights = {
+                "synergy_strength_analysis": {
+                    "radiant_synergy_analysis": processed_results[0].get("analysis", "Analysis not available for Radiant team synergy."),
+                    "dire_synergy_analysis": processed_results[1].get("analysis", "Analysis not available for Dire team synergy.")
+                },
+                "timing_strategy_analysis": {
+                    "early_game": self._extract_section(processed_results[2].get("analysis", ""), "Early Game"),
+                    "mid_game": self._extract_section(processed_results[2].get("analysis", ""), "Mid Game"),
+                    "late_game": self._extract_section(processed_results[2].get("analysis", ""), "Late Game")
+                },
+                "counter_analysis": processed_results[3].get("analysis", "Analysis not available for counter dynamics."),
+                "conclusion": processed_results[4].get("analysis", "Analysis not available for conclusion."),
+                "timing": timing_breakdown
+            }
+
+            # Validate that no key has an empty string
+            for key, value in insights.items():
+                if isinstance(value, dict):
+                    for subkey, subvalue in value.items():
+                        if not subvalue:
+                            insights[key][subkey] = f"Analysis not available for {subkey}."
+                elif not value:
+                    insights[key] = f"Analysis not available for {key}."
+
+            return insights
+
+        except Exception as e:
+            # Add more detailed error information
+            error_detail = f"Error processing team analysis: {str(e)}"
+            if isinstance(e, KeyError):
+                error_detail += f" (Missing key: {str(e)})"
+            elif isinstance(e, IndexError):
+                error_detail += " (Index out of range)"
+            raise Exception(error_detail)
+
+    def _extract_section(self, text: str, section_name: str) -> str:
+        """Extract a specific section from a multi-section text."""
+        try:
+            if not text:
+                return "Analysis not available for this section."
+
+            # Find the section by its heading
+            pattern = f"{section_name}[^:]*:(.*?)(?=\n\n[A-Za-z ]+:|$)"
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                section_text = match.group(1).strip()
+                return section_text if section_text else f"No specific analysis available for {section_name}."
+
+            # If no section found, try to find content that might be relevant
+            if section_name.lower() in text.lower():
+                # Extract a paragraph that contains the section name
+                paragraphs = text.split('\n\n')
+                for para in paragraphs:
+                    if section_name.lower() in para.lower():
+                        return para.strip()
+
+            return f"No specific analysis available for {section_name}."
+        except Exception as e:
+            print(f"Error extracting section {section_name}: {str(e)}")
+            return f"Error extracting {section_name} analysis."
 
 if __name__ == "__main__":
     # Example usage

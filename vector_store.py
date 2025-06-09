@@ -33,6 +33,16 @@ class VectorStore:
         # Initialize or load existing stores
         self._initialize_stores()
 
+    def is_loaded(self) -> bool:
+        """
+        Check if the vector stores are already loaded and initialized.
+
+        Returns:
+            bool: True if both hero and matchup stores are initialized, False otherwise
+        """
+        return hasattr(self, 'hero_store') and hasattr(self, 'matchup_store') and \
+               self.hero_store is not None and self.matchup_store is not None
+
     def _initialize_stores(self):
         """Initialize or load existing vector stores."""
         hero_path = os.path.join(self.db_path, "heroes")

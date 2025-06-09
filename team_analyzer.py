@@ -283,10 +283,16 @@ class TeamAnalyzer:
 
         return radiant_prob, dire_prob, confidence
 
-    def format_team_with_roles(self, team: List[int]) -> List[str]:
+    def format_team_with_roles(self, team: List[int]) -> List[Dict[str, Any]]:
         """
         Assigns each hero in the team to one of the EXPECTED_ROLES based on their role levels.
-        Tries to make the best hero-role assignments so that each role is covered by one hero.
+        Returns a list of dictionaries containing hero information and their assigned role.
+
+        Returns:
+            List[Dict[str, Any]]: List of dictionaries containing:
+                - hero_id: int
+                - display_name: str
+                - role: str
         """
         formatted_team = []
         assigned_heroes = set()
@@ -302,7 +308,11 @@ class TeamAnalyzer:
                     'roles': {r["roleId"]: r["level"] for r in hero_data["roles"]}
                 })
             else:
-                formatted_team.append(f"Hero_{hero_id} (Unknown)")
+                formatted_team.append({
+                    "hero_id": hero_id,
+                    "display_name": f"Hero_{hero_id}",
+                    "role": "unknown"
+                })
 
         # Build candidate list of (hero, role, level)
         role_candidates = []
@@ -337,7 +347,11 @@ class TeamAnalyzer:
                 else:
                     assigned_role = sorted_roles[0][0] if sorted_roles else "unknown"
 
-            formatted_team.append(f"{hero['displayName']} ({assigned_role})")
+            formatted_team.append({
+                "hero_id": hero['id'],
+                "display_name": hero['displayName'],
+                "role": assigned_role
+            })
 
         return formatted_team
 
@@ -356,7 +370,7 @@ class TeamAnalyzer:
                 - Counter scores
                 - Role scores
                 - Overall confidence in the analysis
-                - Formatted team information with hero names and best roles
+                - Team information with hero names and best roles
         """
         self.missing_matchup_count = 0
         self.total_matchup_count = 0
