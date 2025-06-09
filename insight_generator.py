@@ -242,6 +242,15 @@ class InsightGenerator:
                 else:
                     raise json.JSONDecodeError("No JSON content found", response_text, 0)
 
+            # Clean up the JSON string
+            json_str = re.sub(r'//.*?\n', '\n', json_str)  # Remove single-line comments
+            json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)  # Remove multi-line comments
+            json_str = re.sub(r',\s*}', '}', json_str)  # Remove trailing commas
+            json_str = re.sub(r',\s*]', ']', json_str)  # Remove trailing commas in arrays
+            json_str = re.sub(r'}\s*{', '},{', json_str)  # Fix missing commas between objects
+            json_str = re.sub(r'}\s*]', '}]', json_str)  # Fix missing commas before array end
+            json_str = re.sub(r']\s*}', ']}', json_str)  # Fix missing commas before object end
+
             insights = json.loads(json_str)
             return insights
         except json.JSONDecodeError as e:
