@@ -28,6 +28,7 @@ class HeroInfo(BaseModel):
     role: str
     display_name: str
     short_name: str
+    traits: List[str] = Field(default_factory=list, description="List of hero traits like Nuker, Initiator, etc.")
 
 class TeamInfo(BaseModel):
     heroes: List[HeroInfo]
@@ -43,8 +44,8 @@ class AnalysisResponse(BaseModel):
     timing_strategy_analysis: Dict[str, str]
     counter_analysis: str
     conclusion: str
-    confidence: float
-    timing: Optional[Dict[str, Any]]
+    # confidence: float
+    # timing: Optional[Dict[str, Any]]
 
 class TeamAnalysisRequest(BaseModel):
     radiant_team: List[int] = Field(..., min_items=5, max_items=5, description="List of 5 hero IDs for Radiant team")
@@ -60,34 +61,36 @@ async def analyze_teams(request: TeamAnalysisRequest):
         insights = insight_generator.generate_insights(request.radiant_team, request.dire_team)
 
         # Format hero information for both teams
-        def format_hero_info(team_data: List[Dict[str, Any]]) -> List[HeroInfo]:
+        def format_hero_info(assignments: List[Dict[str, Any]]) -> List[HeroInfo]:
             hero_info = []
-            for hero_data in team_data:
-                hero = next((h for h in data_manager.get_hero_directory() if h["id"] == hero_data["hero_id"]), None)
+            for assignment in assignments:
+                hero = next((h for h in data_manager.get_hero_directory() if h["id"] == assignment["hero_id"]), None)
                 if hero:
+                    position_names = {1: "Carry", 2: "Mid", 3: "Offlane", 4: "Soft Support", 5: "Hard Support"}
                     hero_info.append(HeroInfo(
-                        hero_id=hero_data["hero_id"],
-                        role=hero_data["role"],
+                        hero_id=assignment["hero_id"],
+                        role=position_names[assignment["position"]],
                         display_name=hero["displayName"],
-                        short_name=hero["shortName"]
+                        short_name=hero["shortName"],
+                        traits=assignment.get("roles", [])  # Get the traits/roles from the assignment
                     ))
             return hero_info
 
         # Construct the response
         response = {
             "radiant": TeamInfo(
-                heroes=format_hero_info(analysis["radiant_team"]),
+                heroes=format_hero_info(analysis["radiant_assignments"]),
                 win_probability=analysis["radiant_win_probability"],
                 synergy_score=analysis["radiant_synergy"],
-                counter_score=analysis["radiant_counters"],
-                role_score=analysis["radiant_role_score"]
+                counter_score=(analysis["radiant_counters_for"] + (1.0 - analysis["radiant_counters_against"])) / 2.0,
+                role_score=analysis["radiant_role_fit"]
             ),
             "dire": TeamInfo(
-                heroes=format_hero_info(analysis["dire_team"]),
+                heroes=format_hero_info(analysis["dire_assignments"]),
                 win_probability=analysis["dire_win_probability"],
                 synergy_score=analysis["dire_synergy"],
-                counter_score=analysis["dire_counters"],
-                role_score=analysis["dire_role_score"]
+                counter_score=(analysis["dire_counters_for"] + (1.0 - analysis["dire_counters_against"])) / 2.0,
+                role_score=analysis["dire_role_fit"]
             ),
             "synergy_strength_analysis": {
                 "radiant_synergy_analysis": insights["synergy_strength_analysis"]["radiant_synergy_analysis"],
@@ -100,8 +103,8 @@ async def analyze_teams(request: TeamAnalysisRequest):
             },
             "counter_analysis": insights["counter_analysis"],
             "conclusion": insights["conclusion"],
-            "confidence": analysis["confidence"],
-            "timing": insights["timing"]
+            # "confidence": analysis["confidence"],
+            # "timing": insights["timing"]
         }
 
         return response

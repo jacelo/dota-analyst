@@ -4,31 +4,58 @@ import numpy as np
 import argparse
 from itertools import permutations
 
-# Role balance weights for different hero roles. Total should be 1.0
-ROLE_BALANCE_WEIGHTS = {
-    "core": 1.0,
-    "offlane": 0.9,
-    "support": 0.8,
-    "roamer": 0.7,
-    "carry": 1.0
+# Position to role mapping for team composition analysis
+POSITION_ROLE_TRAITS = {
+    1: [  # Carry / Safe Lane
+        "CARRY",
+        "ESCAPE",
+        "DURABLE",
+        "PUSHER",
+        "NUKER",  # Occasionally for snowball carries
+    ],
+    2: [  # Mid Lane
+        "CARRY",
+        "NUKER",
+        "ESCAPE",
+        "DISABLER",
+        "PUSHER",
+    ],
+    3: [  # Offlane
+        "DURABLE",
+        "INITIATOR",
+        "DISABLER",
+        "PUSHER",
+        "NUKER",  # Occasionally
+    ],
+    4: [  # Soft Support
+        "INITIATOR",
+        "DISABLER",
+        "NUKER",
+        "ESCAPE",
+        "SUPPORT",
+    ],
+    5: [  # Hard Support
+        "SUPPORT",
+        "DISABLER",
+        "INITIATOR",
+        "PUSHER",  # Less common, for aura/creep heroes
+    ]
 }
 
-# Expected role distribution for a standard team
-EXPECTED_ROLES = ["carry", "core", "offlane", "support", "roamer"]
-
-# Weights for win probability calculation. Total should be 1.0
-WIN_PROBABILITY_WEIGHTS = {
-    "hero_scores": 0.2,
-    "synergy": 0.4,
-    "counters": 0.1,
-    "roles": 0.3
+# Weights for different aspects of team analysis
+ANALYSIS_WEIGHTS = {
+    "hero_scores": 0.25,      # Individual hero performance
+    "synergy": 0.20,          # Team synergy
+    "counters_for": 0.15,     # How well team counters enemy
+    "counters_against": 0.10, # How well team handles enemy counters
+    "role_fit": 0.30          # How well heroes fit their positions
 }
 
-# Amplification factors for different calculations
-SCORE_AMPLIFICATION_FACTOR = 2.0
-TEAM_SYNERGY_AMPLIFICATION_FACTOR = 3.0
-TEAM_COUNTERS_AMPLIFICATION_FACTOR = 2.0
-
+# Thresholds for synergy and counter calculations
+SYNERGY_THRESHOLD = 0.55  # Only count synergies above this threshold
+COUNTER_THRESHOLD_FOR = 0.60  # Hero A counters hero B if A's win rate > 60%
+COUNTER_THRESHOLD_AGAINST = 0.40  # Hero A is countered by hero B if A's win rate < 40%
+MIN_SAMPLE_SIZE = 100    # Minimum sample size for reliable data
 
 class TeamAnalyzer:
     """
@@ -37,6 +64,62 @@ class TeamAnalyzer:
     This analyzer uses hero matchup data, team synergy, counter picks, and role distribution
     to calculate win probabilities and provide detailed team analysis.
     """
+
+    @classmethod
+    def as_string(cls, results: Dict[str, Any], hero_directory: List[Dict[str, Any]]) -> str:
+        """
+        Format team analysis results as a string.
+
+        Args:
+            results: The analysis results dictionary from analyze_teams()
+            hero_directory: The hero directory for looking up hero names
+
+        Returns:
+            str: Formatted string containing the analysis results
+        """
+        output = []
+        output.append("\nTeam Analysis Results:")
+        output.append("=" * 50)
+
+        # Format Radiant team analysis
+        output.append("\nRadiant Team Analysis:")
+        output.append("-" * 30)
+        output.append(f"Win Probability: {results['radiant_win_probability']:.2%}")
+        output.append(f"Synergy Score: {results['radiant_synergy']:.2%}")
+        output.append(f"Counter Analysis:")
+        output.append(f"  - Can counter: {results['radiant_counters_for']:.2%} of enemy heroes")
+        output.append(f"  - Countered by: {results['radiant_counters_against']:.2%} of enemy heroes")
+        output.append(f"Role Fit Score: {results['radiant_role_fit']:.2%}")
+        output.append("\nRadiant Team Role Assignments:")
+        for assignment in results['radiant_assignments']:
+            hero = next((h for h in hero_directory if h["id"] == assignment["hero_id"]), None)
+            hero_name = hero["displayName"] if hero else f"Hero_{assignment['hero_id']}"
+            position_names = {1: "Carry", 2: "Mid", 3: "Offlane", 4: "Soft Support", 5: "Hard Support"}
+            output.append(f"  - {hero_name}: {position_names[assignment['position']]} (Score: {assignment['score']:.2%})")
+            if assignment['roles']:
+                output.append(f"    Roles: {', '.join(assignment['roles'])}")
+
+        # Format Dire team analysis
+        output.append("\nDire Team Analysis:")
+        output.append("-" * 30)
+        output.append(f"Win Probability: {results['dire_win_probability']:.2%}")
+        output.append(f"Synergy Score: {results['dire_synergy']:.2%}")
+        output.append(f"Counter Analysis:")
+        output.append(f"  - Can counter: {results['dire_counters_for']:.2%} of enemy heroes")
+        output.append(f"  - Countered by: {results['dire_counters_against']:.2%} of enemy heroes")
+        output.append(f"Role Fit Score: {results['dire_role_fit']:.2%}")
+        output.append("\nDire Team Role Assignments:")
+        for assignment in results['dire_assignments']:
+            hero = next((h for h in hero_directory if h["id"] == assignment["hero_id"]), None)
+            hero_name = hero["displayName"] if hero else f"Hero_{assignment['hero_id']}"
+            position_names = {1: "Carry", 2: "Mid", 3: "Offlane", 4: "Soft Support", 5: "Hard Support"}
+            output.append(f"  - {hero_name}: {position_names[assignment['position']]} (Score: {assignment['score']:.2%})")
+            if assignment['roles']:
+                output.append(f"    Roles: {', '.join(assignment['roles'])}")
+
+        # output.append(f"\nOverall Confidence: {results['confidence']:.2%}")
+
+        return "\n".join(output)
 
     def __init__(self):
         """
@@ -49,9 +132,19 @@ class TeamAnalyzer:
         self.hero_directory = self.data_manager.get_hero_directory()
         self.matchups = self.data_manager.get_matchups()
         self.matchup_lookup = self._build_matchup_lookup()
-        self.hero_baselines = self._compute_hero_baselines()
+        self.matchup_sample_sizes = self._compute_matchup_sample_sizes()
+        self.hero_roles = self._build_hero_role_lookup()
         self.missing_matchup_count = 0
         self.total_matchup_count = 0
+        self.hero_versatility = self._compute_hero_versatility()
+
+        # Debug: Print matchup data stats
+        total_matchups = len(self.matchup_lookup)
+        total_samples = sum(self.matchup_sample_sizes.values())
+        print(f"\nMatchup Data Stats:")
+        print(f"Total unique matchups: {total_matchups}")
+        print(f"Total sample size: {total_samples}")
+        print(f"Average samples per matchup: {total_samples/total_matchups if total_matchups > 0 else 0:.1f}")
 
     def _build_matchup_lookup(self) -> Dict[Tuple[int, int], float]:
         """
@@ -76,212 +169,359 @@ class TeamAnalyzer:
                                 lookup[(h1, h2)] = win_rate
         return lookup
 
-    def _compute_hero_baselines(self) -> Dict[int, float]:
-        """
-        Compute baseline win rates for each hero based on their overall performance.
+    def _build_hero_role_lookup(self) -> Dict[int, Dict[str, int]]:
+        """Build a lookup table for hero roles and their levels."""
+        role_lookup = {}
+        for hero in self.hero_directory:
+            role_lookup[hero["id"]] = {
+                role["roleId"]: role["level"]
+                for role in hero.get("roles", [])
+            }
+        return role_lookup
 
-        Returns:
-            Dict[int, float]: A dictionary mapping hero IDs to their baseline win rates.
-        """
-        hero_win_sums = {}
-        hero_win_counts = {}
-        for (h1, h2), win_rate in self.matchup_lookup.items():
-            hero_win_sums[h1] = hero_win_sums.get(h1, 0) + win_rate
-            hero_win_counts[h1] = hero_win_counts.get(h1, 0) + 1
-        return {
-            hero: hero_win_sums[hero] / hero_win_counts[hero] for hero in hero_win_sums
-        }
-
-    def calculate_hero_win_rate(self, hero_id: int, against_hero_id: int) -> float:
-        """
-        Calculate the win rate of a hero against another hero.
-
-        Args:
-            hero_id (int): The ID of the hero to calculate win rate for
-            against_hero_id (int): The ID of the opposing hero
-
-        Returns:
-            float: The win rate of hero_id against against_hero_id, between 0 and 1
-        """
-        self.total_matchup_count += 1
-        win_rate = self.matchup_lookup.get((hero_id, against_hero_id))
-        if win_rate is not None:
-            return win_rate
-
-        win_rate = self.matchup_lookup.get((against_hero_id, hero_id))
-        if win_rate is not None:
-            return 1.0 - win_rate
-
-        self.missing_matchup_count += 1
-        return self.hero_baselines.get(hero_id, 0.5)
-
-    def amplify_score(self, score: float, factor: float = SCORE_AMPLIFICATION_FACTOR) -> float:
-        """
-        Amplify a score to make differences more pronounced.
-
-        Args:
-            score (float): The input score between 0 and 1
-            factor (float): The amplification factor to apply
-
-        Returns:
-            float: The amplified score, still between 0 and 1
-        """
-        deviation = score - 0.5
-        amplified = 0.5 + factor * deviation
-        return max(0.0, min(1.0, amplified))
-
-    def calculate_team_synergy(self, team: List[int]) -> float:
-        """
-        Calculate the synergy score for a team of heroes.
-
-        Args:
-            team (List[int]): List of hero IDs in the team
-
-        Returns:
-            float: A synergy score between 0 and 1, where 1 indicates perfect synergy
-        """
-        synergy_scores = []
-        count = 0
-        for i, hero1 in enumerate(team):
-            for hero2 in team[i+1:]:
-                synergy = self.matchup_lookup.get((hero1, hero2))
-                if synergy is None:
-                    synergy = self.matchup_lookup.get((hero2, hero1))
-                if synergy is not None:
-                    synergy_scores.append(synergy)
-                    count += 1
-        if not synergy_scores:
-            return 0.5
-
-        avg = np.mean(synergy_scores)
-        coverage_factor = count / 10.0  # 10 is max unique pairs in team of 5
-        return self.amplify_score(avg * coverage_factor + 0.5 * (1 - coverage_factor),
-                                factor=TEAM_SYNERGY_AMPLIFICATION_FACTOR)
-
-    def calculate_team_counters(self, team: List[int], enemy_team: List[int]) -> float:
-        """
-        Calculate how well a team counters the enemy team.
-
-        Args:
-            team (List[int]): List of hero IDs in the team
-            enemy_team (List[int]): List of hero IDs in the enemy team
-
-        Returns:
-            float: A counter score between 0 and 1, where 1 indicates perfect countering
-        """
-        counter_scores = []
-        matchups_found = 0
+    def calculate_hero_scores(self, team: List[int], enemy_team: List[int]) -> float:
+        """Calculate average win rates of heroes in the team against enemy team."""
+        hero_scores = []
         for hero in team:
-            has_counter = False
+            # Calculate average win rate against all enemy heroes
+            win_rates = []
             for enemy in enemy_team:
                 rate = self.matchup_lookup.get((hero, enemy))
                 if rate is None:
-                    rate = 1.0 - self.matchup_lookup.get((enemy, hero), 0.5)
+                    rate = self.matchup_lookup.get((enemy, hero))
+                    if rate is not None:
+                        rate = 1.0 - rate
+                if rate is not None:
+                    win_rates.append(rate)
+
+            if win_rates:
+                hero_scores.append(sum(win_rates) / len(win_rates))
+
+        return sum(hero_scores) / len(hero_scores) if hero_scores else 0.5
+
+    def calculate_team_synergy(self, team: List[int]) -> float:
+        """Calculate percentage of heroes that have synergies within the team."""
+        heroes_with_synergy = set()
+        total_possible_pairs = 0
+
+        for i, hero1 in enumerate(team):
+            for hero2 in team[i+1:]:
+                total_possible_pairs += 1
+                # Try both directions for the matchup
+                synergy1 = self.matchup_lookup.get((hero1, hero2))
+                synergy2 = self.matchup_lookup.get((hero2, hero1))
+
+                # Use the better synergy value if available
+                synergy = None
+                if synergy1 is not None:
+                    synergy = synergy1
+                if synergy2 is not None and (synergy is None or synergy2 > synergy):
+                    synergy = synergy2
+
+                if synergy is not None and synergy > SYNERGY_THRESHOLD:
+                    heroes_with_synergy.add(hero1)
+                    heroes_with_synergy.add(hero2)
+                    # Debug: Print found synergy
+                    hero1_name = next((h["displayName"] for h in self.hero_directory if h["id"] == hero1), f"Hero_{hero1}")
+                    hero2_name = next((h["displayName"] for h in self.hero_directory if h["id"] == hero2), f"Hero_{hero2}")
+                    print(f"Found synergy: {hero1_name} + {hero2_name} ({synergy:.2%})")
+
+        return len(heroes_with_synergy) / len(team) if team else 0.0
+
+    def calculate_counters_for(self, team: List[int], enemy_team: List[int]) -> float:
+        """Calculate how well the team counters enemy heroes using a continuous score."""
+        counter_scores = []
+        print("\nCalculating counters_for:")
+        print(f"Team: {[next((h['displayName'] for h in self.hero_directory if h['id'] == hero), f'Hero_{hero}') for hero in team]}")
+        print(f"Enemy: {[next((h['displayName'] for h in self.hero_directory if h['id'] == hero), f'Hero_{hero}') for hero in enemy_team]}")
+
+        for hero in team:
+            hero_counter_scores = []
+            hero_name = next((h["displayName"] for h in self.hero_directory if h["id"] == hero), f"Hero_{hero}")
+            print(f"\nChecking counters for {hero_name}:")
+
+            for enemy in enemy_team:
+                # Try both directions for the matchup
+                rate1 = self.matchup_lookup.get((hero, enemy))
+                rate2 = self.matchup_lookup.get((enemy, hero))
+
+                # Use the better counter value if available
+                rate = None
+                if rate1 is not None:
+                    rate = rate1
+                if rate2 is not None and (rate is None or (1.0 - rate2) > rate):
+                    rate = 1.0 - rate2
+
+                enemy_name = next((h["displayName"] for h in self.hero_directory if h["id"] == enemy), f"Hero_{enemy}")
+                if rate is not None:
+                    # Calculate a continuous counter score
+                    # If rate > COUNTER_THRESHOLD_FOR, hero counters enemy
+                    # Score is 0 at COUNTER_THRESHOLD_FOR and 1 at 1.0
+                    counter_score = max(0.0, (rate - COUNTER_THRESHOLD_FOR) / (1.0 - COUNTER_THRESHOLD_FOR))
+                    hero_counter_scores.append(counter_score)
+                    print(f"  vs {enemy_name}: {rate:.2%} win rate -> {counter_score:.2%} counter score")
+                    # Debug: Print found counter
+                    if counter_score > 0:
+                        print(f"  Found counter: {hero_name} counters {enemy_name} ({rate:.2%}, score: {counter_score:.2%})")
                 else:
-                    has_counter = True
-                counter_scores.append(rate)
-            if has_counter:
-                matchups_found += 1
+                    print(f"  vs {enemy_name}: No matchup data found")
 
-        if not counter_scores:
-            return 0.5
+            if hero_counter_scores:
+                # Average the counter scores for this hero against all enemies
+                avg_score = sum(hero_counter_scores) / len(hero_counter_scores)
+                counter_scores.append(avg_score)
+                print(f"  Average counter score for {hero_name}: {avg_score:.2%}")
+            else:
+                print(f"  No counter scores for {hero_name}")
 
-        avg = np.mean(counter_scores)
-        coverage_factor = matchups_found / len(team)
-        return self.amplify_score(avg * coverage_factor + 0.5 * (1 - coverage_factor),
-                                factor=TEAM_COUNTERS_AMPLIFICATION_FACTOR)
+        final_score = sum(counter_scores) / len(counter_scores) if counter_scores else 0.0
+        print(f"\nFinal counters_for score: {final_score:.2%}")
+        return final_score
 
-    def calculate_role_score(self, team: List[int]) -> float:
-        """
-        Calculate how well a team's heroes fit their expected roles.
+    def calculate_counters_against(self, team: List[int], enemy_team: List[int]) -> float:
+        """Calculate how well the team handles enemy counters using a continuous score."""
+        counter_scores = []
+        print("\nCalculating counters_against:")
+        print(f"Team: {[next((h['displayName'] for h in self.hero_directory if h['id'] == hero), f'Hero_{hero}') for hero in team]}")
+        print(f"Enemy: {[next((h['displayName'] for h in self.hero_directory if h['id'] == hero), f'Hero_{hero}') for hero in enemy_team]}")
 
-        Args:
-            team (List[int]): List of hero IDs in the team
+        for hero in team:
+            hero_counter_scores = []
+            hero_name = next((h["displayName"] for h in self.hero_directory if h["id"] == hero), f"Hero_{hero}")
+            print(f"\nChecking counters against {hero_name}:")
 
-        Returns:
-            float: A role score between 0 and 1, where 1 indicates perfect role distribution
-        """
-        role_data = self.data_manager.get_team_roles(team)
+            for enemy in enemy_team:
+                # Try both directions for the matchup
+                rate1 = self.matchup_lookup.get((enemy, hero))
+                rate2 = self.matchup_lookup.get((hero, enemy))
 
-        # Build hero-role score matrix
-        hero_role_matrix = {
-            hero: {
-                role: role_data.get(hero, {}).get(role, 0.0) * ROLE_BALANCE_WEIGHTS.get(role, 1.0)
-                for role in EXPECTED_ROLES
-            }
-            for hero in team
-        }
+                # Use the better counter value if available
+                rate = None
+                if rate1 is not None:
+                    rate = rate1
+                if rate2 is not None and (rate is None or (1.0 - rate2) > rate):
+                    rate = 1.0 - rate2
 
+                enemy_name = next((h["displayName"] for h in self.hero_directory if h["id"] == enemy), f"Hero_{enemy}")
+                if rate is not None:
+                    # Calculate a continuous counter score
+                    # If rate < COUNTER_THRESHOLD_AGAINST, hero is countered by enemy
+                    # Score is 0 at COUNTER_THRESHOLD_AGAINST and 1 at 0.0
+                    counter_score = max(0.0, (COUNTER_THRESHOLD_AGAINST - rate) / COUNTER_THRESHOLD_AGAINST)
+                    hero_counter_scores.append(counter_score)
+                    print(f"  vs {enemy_name}: {rate:.2%} win rate -> {counter_score:.2%} counter score")
+                    # Debug: Print found counter
+                    if counter_score > 0:
+                        print(f"  Found counter: {enemy_name} counters {hero_name} ({rate:.2%}, score: {counter_score:.2%})")
+                else:
+                    print(f"  vs {enemy_name}: No matchup data found")
+
+            if hero_counter_scores:
+                # Average the counter scores for this hero against all enemies
+                avg_score = sum(hero_counter_scores) / len(hero_counter_scores)
+                counter_scores.append(avg_score)
+                print(f"  Average counter score for {hero_name}: {avg_score:.2%}")
+            else:
+                print(f"  No counter scores for {hero_name}")
+
+        final_score = sum(counter_scores) / len(counter_scores) if counter_scores else 0.0
+        print(f"\nFinal counters_against score: {final_score:.2%}")
+        return final_score
+
+    def calculate_role_fit(self, team: List[int]) -> Tuple[float, List[Dict[str, Any]]]:
+        """Calculate how well heroes fit their positions based on role traits."""
         best_score = 0.0
-        # Try all permutations of roles among team
-        for role_order in permutations(EXPECTED_ROLES):
-            used_heroes = set()
-            total_score = 0.0
-            for role, hero in zip(role_order, team):
-                score = hero_role_matrix.get(hero, {}).get(role, 0.0)
-                total_score += score
-                used_heroes.add(hero)
-            best_score = max(best_score, total_score)
+        best_assignment = None
 
-        return best_score / len(EXPECTED_ROLES)
+        # Try all possible hero-to-position assignments
+        for position_order in permutations(range(1, 6)):  # 5 positions
+            position_scores = []
+            hero_assignments = []
+            used_heroes = set()
+
+            for pos, hero_id in zip(position_order, team):
+                if hero_id in used_heroes:
+                    continue
+
+                hero_roles = self.hero_roles.get(hero_id, {})
+                position_traits = POSITION_ROLE_TRAITS[pos]
+
+                # Calculate how well hero fits this position
+                role_scores = []
+                for trait in position_traits:
+                    role_level = hero_roles.get(trait, 0)
+                    role_scores.append(role_level / 3.0)  # Normalize by max level
+
+                position_score = max(role_scores) if role_scores else 0.0
+                position_scores.append(position_score)
+
+                hero_assignments.append({
+                    "hero_id": hero_id,
+                    "position": pos,
+                    "score": position_score,
+                    "roles": [trait for trait in position_traits if hero_roles.get(trait, 0) > 0]
+                })
+                used_heroes.add(hero_id)
+
+            if len(position_scores) == 5:  # All positions filled
+                total_score = sum(position_scores) / 5.0
+                if total_score > best_score:
+                    best_score = total_score
+                    best_assignment = hero_assignments
+
+        return (best_score, best_assignment) if best_assignment else (0.0, [])
+
+    def calculate_data_quality_score(self, team1: List[int], team2: List[int]) -> float:
+        """Calculate a quality score for the matchup data with improved reliability assessment."""
+        total_samples = 0
+        valid_matchups = 0
+        reliable_matchups = 0
+
+        # Check sample sizes for all hero matchups
+        for h1 in team1:
+            for h2 in team2:
+                # Check both directions of the matchup
+                sample_size1 = self.matchup_sample_sizes.get((h1, h2), 0)
+                sample_size2 = self.matchup_sample_sizes.get((h2, h1), 0)
+                sample_size = max(sample_size1, sample_size2)
+
+                if sample_size > 0:
+                    total_samples += sample_size
+                    valid_matchups += 1
+                    if sample_size >= MIN_SAMPLE_SIZE:
+                        reliable_matchups += 1
+
+        # Calculate quality score based on:
+        # 1. Number of valid matchups (should be 25 for full team vs team)
+        # 2. Number of reliable matchups (with sufficient sample size)
+        # 3. Average sample size per matchup
+        matchup_coverage = valid_matchups / 25.0  # 5x5 = 25 possible matchups
+        reliable_coverage = reliable_matchups / 25.0
+        avg_sample_size = total_samples / max(valid_matchups, 1)
+
+        # Normalize sample size (assuming 1000 is a good sample size)
+        sample_size_score = min(1.0, avg_sample_size / 1000.0)
+
+        # Combine factors with more weight on reliable matchups
+        # Ensure minimum confidence of 0.3 even with poor data
+        base_confidence = (matchup_coverage * 0.3 + reliable_coverage * 0.5 + sample_size_score * 0.2)
+        return max(0.3, base_confidence)
 
     def calculate_win_probability(self, radiant_team: List[int], dire_team: List[int]) -> Tuple[float, float, float]:
-        """
-        Calculate win probabilities for both teams and confidence in the prediction.
+        """Calculate win probabilities for both teams based on all factors."""
+        # Calculate individual scores
+        radiant_scores = {
+            "hero_scores": self.calculate_hero_scores(radiant_team, dire_team),
+            "synergy": self.calculate_team_synergy(radiant_team),
+            "counters_for": self.calculate_counters_for(radiant_team, dire_team),
+            "counters_against": self.calculate_counters_against(radiant_team, dire_team),
+            "role_fit": self.calculate_role_fit(radiant_team)[0]
+        }
 
-        Args:
-            radiant_team (List[int]): List of hero IDs in the Radiant team
-            dire_team (List[int]): List of hero IDs in the Dire team
+        dire_scores = {
+            "hero_scores": self.calculate_hero_scores(dire_team, radiant_team),
+            "synergy": self.calculate_team_synergy(dire_team),
+            "counters_for": self.calculate_counters_for(dire_team, radiant_team),
+            "counters_against": self.calculate_counters_against(dire_team, radiant_team),
+            "role_fit": self.calculate_role_fit(dire_team)[0]
+        }
 
-        Returns:
-            Tuple[float, float, float]: A tuple containing:
-                - Radiant team's win probability
-                - Dire team's win probability
-                - Confidence in the prediction
-        """
-        radiant_hero_scores = [
-            sum(self.calculate_hero_win_rate(r_hero, d_hero) for d_hero in dire_team) / len(dire_team)
-            for r_hero in radiant_team
-        ]
-        dire_hero_scores = [
-            sum(self.calculate_hero_win_rate(d_hero, r_hero) for r_hero in radiant_team) / len(radiant_team)
-            for d_hero in dire_team
-        ]
+        # Print debug information
+        print("\nDebug Scores:")
+        print("Radiant Scores:", {k: f"{v:.2%}" for k, v in radiant_scores.items()})
+        print("Dire Scores:", {k: f"{v:.2%}" for k, v in dire_scores.items()})
 
-        radiant_synergy = self.calculate_team_synergy(radiant_team)
-        dire_synergy = self.calculate_team_synergy(dire_team)
+        # Calculate weighted scores
+        radiant_total = sum(score * ANALYSIS_WEIGHTS[factor]
+                          for factor, score in radiant_scores.items())
+        dire_total = sum(score * ANALYSIS_WEIGHTS[factor]
+                        for factor, score in dire_scores.items())
 
-        radiant_counters = self.calculate_team_counters(radiant_team, dire_team)
-        dire_counters = self.calculate_team_counters(dire_team, radiant_team)
+        print(f"Weighted Totals - Radiant: {radiant_total:.2%}, Dire: {dire_total:.2%}")
 
-        radiant_roles = self.calculate_role_score(radiant_team)
-        dire_roles = self.calculate_role_score(dire_team)
+        # Calculate data quality for confidence
+        data_quality = self.calculate_data_quality_score(radiant_team, dire_team)
+        print(f"Data Quality Score: {data_quality:.2%}")
 
-        confidence = 1.0 - (self.missing_matchup_count / max(self.total_matchup_count, 1))
-
-        radiant_score = (
-            np.mean(radiant_hero_scores) * WIN_PROBABILITY_WEIGHTS["hero_scores"] +
-            radiant_synergy * WIN_PROBABILITY_WEIGHTS["synergy"] * confidence +
-            radiant_counters * WIN_PROBABILITY_WEIGHTS["counters"] * confidence +
-            radiant_roles * WIN_PROBABILITY_WEIGHTS["roles"]
-        )
-        dire_score = (
-            np.mean(dire_hero_scores) * WIN_PROBABILITY_WEIGHTS["hero_scores"] +
-            dire_synergy * WIN_PROBABILITY_WEIGHTS["synergy"] * confidence +
-            dire_counters * WIN_PROBABILITY_WEIGHTS["counters"] * confidence +
-            dire_roles * WIN_PROBABILITY_WEIGHTS["roles"]
-        )
-
-        total_score = radiant_score + dire_score
+        # Normalize to probabilities
+        total_score = radiant_total + dire_total
         if total_score == 0:
             radiant_prob = 0.5
         else:
-            radiant_prob = radiant_score / total_score
+            # Calculate base probability
+            radiant_prob = radiant_total / total_score
 
-        radiant_prob = 0.5 + (radiant_prob - 0.5) * confidence
+            # Apply confidence scaling
+            # This ensures that even with low confidence, we still reflect the team differences
+            # but scale them based on our confidence in the data
+            deviation = radiant_prob - 0.5
+            radiant_prob = 0.5 + (deviation * data_quality)
+
+            # Ensure probabilities stay within reasonable bounds
+            radiant_prob = max(0.4, min(0.6, radiant_prob))
+
         dire_prob = 1.0 - radiant_prob
 
-        return radiant_prob, dire_prob, confidence
+        return radiant_prob, dire_prob, data_quality
+
+    def calculate_meta_fit_score(self, team: List[int]) -> float:
+        """Calculate how well the team composition fits the current meta."""
+        # This is a simplified version - in reality, this would use current meta data
+        # For now, we'll use hero versatility as a proxy for meta fit
+        versatility_scores = [self.hero_versatility.get(hero_id, 0.5) for hero_id in team]
+        return sum(versatility_scores) / len(team)
+
+    def analyze_teams(self, radiant_team: List[int], dire_team: List[int]) -> Dict[str, Any]:
+        """Perform complete team analysis."""
+        # Calculate win probabilities
+        radiant_prob, dire_prob, confidence = self.calculate_win_probability(radiant_team, dire_team)
+
+        # Get role assignments
+        radiant_role_fit, radiant_assignments = self.calculate_role_fit(radiant_team)
+        dire_role_fit, dire_assignments = self.calculate_role_fit(dire_team)
+
+        return {
+            "radiant_win_probability": radiant_prob,
+            "radiant_synergy": self.calculate_team_synergy(radiant_team),
+            "radiant_counters_for": self.calculate_counters_for(radiant_team, dire_team),
+            "radiant_counters_against": self.calculate_counters_against(radiant_team, dire_team),
+            "radiant_role_fit": radiant_role_fit,
+            "radiant_assignments": radiant_assignments,
+            "dire_win_probability": dire_prob,
+            "dire_synergy": self.calculate_team_synergy(dire_team),
+            "dire_counters_for": self.calculate_counters_for(dire_team, radiant_team),
+            "dire_counters_against": self.calculate_counters_against(dire_team, radiant_team),
+            "dire_role_fit": dire_role_fit,
+            "dire_assignments": dire_assignments,
+            # "confidence": confidence
+        }
+
+    def _compute_matchup_sample_sizes(self) -> Dict[Tuple[int, int], int]:
+        """Compute sample sizes for each matchup to assess data reliability."""
+        sample_sizes = {}
+        for hero_id_str, hero_data in self.matchups.items():
+            for section in ['advantage', 'disadvantage']:
+                for group in hero_data.get(section, []):
+                    for kind in ['with', 'vs']:
+                        for matchup in group.get(kind, []):
+                            h1 = matchup.get('heroId1')
+                            h2 = matchup.get('heroId2')
+                            sample_size = matchup.get('sampleSize', 0)
+                            if h1 is not None and h2 is not None:
+                                sample_sizes[(h1, h2)] = sample_size
+        return sample_sizes
+
+    def _compute_hero_versatility(self) -> Dict[int, float]:
+        """Compute how versatile each hero is based on their roles."""
+        versatility = {}
+        for hero in self.hero_directory:
+            roles = hero.get("roles", [])
+            if roles:
+                # Count number of roles with level >= 2
+                high_level_roles = sum(1 for r in roles if r.get("level", 0) >= 2)
+                # Calculate versatility score (0-1)
+                versatility[hero["id"]] = min(1.0, high_level_roles / 3.0)
+        return versatility
 
     def format_team_with_roles(self, team: List[int]) -> List[Dict[str, Any]]:
         """
@@ -355,42 +595,6 @@ class TeamAnalyzer:
 
         return formatted_team
 
-    def analyze_teams(self, radiant_team: List[int], dire_team: List[int]) -> Dict[str, Any]:
-        """
-        Perform a complete analysis of both teams.
-
-        Args:
-            radiant_team (List[int]): List of hero IDs in the Radiant team
-            dire_team (List[int]): List of hero IDs in the Dire team
-
-        Returns:
-            Dict[str, Any]: A dictionary containing:
-                - Win probabilities for both teams
-                - Synergy scores
-                - Counter scores
-                - Role scores
-                - Overall confidence in the analysis
-                - Team information with hero names and best roles
-        """
-        self.missing_matchup_count = 0
-        self.total_matchup_count = 0
-
-        radiant_prob, dire_prob, confidence = self.calculate_win_probability(radiant_team, dire_team)
-
-        return {
-            "radiant_win_probability": radiant_prob,
-            "radiant_synergy": self.calculate_team_synergy(radiant_team),
-            "radiant_counters": self.calculate_team_counters(radiant_team, dire_team),
-            "radiant_role_score": self.calculate_role_score(radiant_team),
-            "dire_win_probability": dire_prob,
-            "dire_synergy": self.calculate_team_synergy(dire_team),
-            "dire_counters": self.calculate_team_counters(dire_team, radiant_team),
-            "dire_role_score": self.calculate_role_score(dire_team),
-            "confidence": confidence,
-            "radiant_team": self.format_team_with_roles(radiant_team),
-            "dire_team": self.format_team_with_roles(dire_team)
-        }
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Analyze Dota 2 team compositions')
     parser.add_argument('--radiant', nargs=5, type=int, required=True, help='List of 5 hero IDs for Radiant team')
@@ -400,18 +604,5 @@ if __name__ == "__main__":
     analyzer = TeamAnalyzer()
     results = analyzer.analyze_teams(args.radiant, args.dire)
 
-    print("\nTeam Analysis Results:")
-    print("=" * 50)
-    print(f"Radiant Team: {results['radiant_team']}")
-    print(f"Win Probability: {results['radiant_win_probability']:.2%}")
-    print(f"Synergy: {results['radiant_synergy']:.2%}")
-    print(f"Counters: {results['radiant_counters']:.2%}")
-    print(f"Role Score: {results['radiant_role_score']:.2%}")
-
-    print(f"\nDire Team: {results['dire_team']}")
-    print(f"Win Probability: {results['dire_win_probability']:.2%}")
-    print(f"Synergy: {results['dire_synergy']:.2%}")
-    print(f"Counters: {results['dire_counters']:.2%}")
-    print(f"Role Score: {results['dire_role_score']:.2%}")
-
-    print(f"\nConfidence Score: {results['confidence']:.2%}")
+    # Use the new as_string method instead of printing directly
+    print(TeamAnalyzer.as_string(results, analyzer.hero_directory))
